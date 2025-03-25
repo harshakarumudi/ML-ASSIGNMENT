@@ -1,0 +1,169 @@
+import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+import os
+from skimage.feature import hog, local_binary_pattern
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from tensorflow.keras.applications import VGG16
+from tensorflow.keras.models import Model
+from tensorflow.keras.datasets import cifar10
+
+# ✅ Step 1: Load CIFAR-10 Dataset
+(X_train, y_train), (X_test, y_test) = cifar10.load_data()
+
+# ✅ Step 2: Reduce Dataset Size for Faster Execution
+train_sample_size = 5000  # Reduce from 50,000 to 5,000
+test_sample_size = 1000  # Reduce from 10,000 to 1,000
+
+X_train, y_train = X_train[:train_sample_size], y_train[:train_sample_size]
+X_test, y_test = X_test[:test_sample_size], y_test[:test_sample_size]
+
+y_train = y_train.flatten()
+y_test = y_test.flatten()
+
+# ✅ Step 3: Preprocess Images (Grayscale, Resize, Normalize)
+def preprocess_images(images, target_size=(32, 32)):  
+    processed_images = []
+    for img in images:
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        resized = cv2.resize(gray, target_size)
+        normalized = resized / 255.0
+        processed_images.append(normalized.astype(np.float32))
+    return np.array(processed_images)
+
+X_train_processed = preprocess_images(X_train)
+X_test_processed = preprocess_images(X_test)
+
+# ✅ Step 4: Display Original vs Preprocessed Images
+def show_images(X_original, X_processed, num_images=5):
+    fig, axes = plt.subplots(2, num_images, figsize=(12, 5))
+
+    for i in range(num_images):
+        axes[0, i].imshow(X_original[i])  
+        axes[0, i].axis("off")
+        axes[0, i].set_title(f"Original {i+1}")
+
+        axes[1, i].imshow(X_processed[i], cmap="gray")  
+        axes[1, i].axis("off")
+        axes[1, i].set_title(f"Preprocessed {i+1}")
+
+    plt.suptitle("Original vs Preprocessed Images")
+    plt.show()
+
+show_images(X_train, X_train_processed)
+
+# ✅ Step 5: Extract & Visualize HOG Features
+def extract_hog_features(images):
+    hog_features = []
+    hog_images = []
+    for img in images:
+        feature, hog_image = hog(img, pixels_per_cell=(8,8), cells_per_block=(2,2), visualize=True)
+        hog_features.append(feature)
+        hog_images.append(hog_image)
+    return np.array(hog_features), np.array(hog_images)
+
+hog_train, hog_images_train = extract_hog_features(X_train_processed)
+hog_test, _ = extract_hog_features(X_test_processed)
+
+# Show HOG visualization
+plt.figure(figsize=(10, 5))
+plt.subplot(1, 2, 1)
+plt.imshow(X_train_processed[0], cmap="gray")
+plt.title("Original Grayscale Image")
+plt.axis("off")
+
+plt.subplot(1, 2, 2)
+plt.imshow(hog_images_train[0], cmap="gray")
+plt.title("HOG Features")
+plt.axis("off")
+
+plt.suptitle("HOG Feature Visualization")
+plt.show()
+
+# ✅ Step 6: Extract & Visualize LBP Features
+def extract_lbp_features(images):
+    lbp_images = []
+    for img in images:
+        lbp = local_binary_pattern(img, P=8, R=1)  
+        lbp_images.append(lbp)
+    return np.array(lbp_images)
+
+lbp_train = extract_lbp_features(X_train_processed)
+lbp_test = extract_lbp_features(X_test_processed)
+
+# Show LBP visualization
+plt.figure(figsize=(10, 5))
+plt.subplot(1, 2, 1)
+plt.imshow(X_train_processed[0], cmap="gray")
+plt.title("Original Grayscale Image")
+plt.axis("off")
+
+plt.subplot(1, 2, 2)
+plt.imshow(lbp_train[0], cmap="gray")
+plt.title("LBP Features")
+plt.axis("off")
+
+plt.suptitle("LBP Feature Visualization")
+plt.show()
+
+# ✅ Step 7: Extract Deep Learning Features Using VGG16
+def extract_deep_features(images):
+    base_model = VGG16(weights='imagenet', include_top=False, input_shape=(32, 32, 3))  
+    model = Model(inputs=base_model.input, outputs=base_model.output)
+
+    # Convert grayscale images to RGB before feeding to VGG16
+    images_rgb = np.stack([cv2.cvtColor((img * 255).astype(np.uint8), cv2.COLOR_GRAY2RGB) for img in images])
+
+    features = model.predict(images_rgb, batch_size=32)
+    return features.reshape(features.shape[0], -1)
+
+deep_train = extract_deep_features(X_train_processed[:2500])  # Reduce to 2500 images for memory
+deep_test = extract_deep_features(X_test_processed[:500])  # Reduce to 500 test images
+
+# ✅ Step 8: Train and Evaluate Multiple Classifiers
+def train_evaluate_classifiers(X_train, X_test, y_train, y_test):
+    classifiers = {
+        'Random Forest': RandomForestClassifier(n_estimators=50, random_state=42),
+        'Logistic Regression': LogisticRegression(max_iter=500),
+        'K-Nearest Neighbors': KNeighborsClassifier(n_neighbors=3)
+    }
+    
+    results = {}
+    for name, clf in classifiers.items():
+        clf.fit(X_train, y_train)
+        y_pred = clf.predict(X_test)
+
+        acc = accuracy_score(y_test, y_pred)
+        precision = precision_score(y_test, y_pred, average='macro')
+        recall = recall_score(y_test, y_pred, average='macro')
+        f1 = f1_score(y_test, y_pred, average='macro')
+
+        results[name] = (acc, precision, recall, f1)
+    
+    return results
+
+# ✅ Step 9: Run Classifiers on HOG, LBP, and Deep Learning Features
+feature_sets = {
+    "HOG Features": (hog_train, hog_test),
+    "LBP Features": (lbp_train, lbp_test),
+    "Deep Learning Features": (deep_train, deep_test)
+}
+
+for feature_name, (X_train_feat, X_test_feat) in feature_sets.items():
+    print(f"\n🔹 Training on {feature_name}...")
+
+    results = train_evaluate_classifiers(X_train_feat, X_test_feat, y_train[:len(X_train_feat)], y_test[:len(X_test_feat)])
+
+    print(f"📊 Results for {feature_name}:")
+    for model, metrics in results.items():
+        acc, precision, recall, f1 = metrics
+        print(f"\n🟢 {model} Metrics:")
+        print(f"✅ Accuracy: {acc:.4f}")
+        print(f"✅ Precision: {precision:.4f}")
+        print(f"✅ Recall: {recall:.4f}")
+        print(f"✅ F1-score: {f1:.4f}")
+    print("-" * 50)
